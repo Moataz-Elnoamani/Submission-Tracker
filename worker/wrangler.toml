@@ -1,0 +1,37 @@
+name = "mn-portal-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Run log for the manager view. Create it once with:
+#   npx wrangler kv namespace create RUNS
+# then paste the id it prints below.
+[[kv_namespaces]]
+binding = "RUNS"
+id = "PASTE_KV_NAMESPACE_ID_HERE"
+
+[vars]
+# Not secret — safe to commit.
+WORKFLOW_ID = "23a4ac11-3fe8-4172-a317-4422e8040de6"
+SPREADSHEET_ID = "1GeML664hQhkxUZIptoNh2SdvzVnaXOLtkURDh6kbQ18"
+# Your GitHub Pages origin (no trailing slash). Comma-separate several; "*" allows all.
+ALLOWED_ORIGINS = "https://YOUR-GITHUB-USER.github.io"
+MANAGER_EMAIL = "nada.elasraby@aaico.com"
+# Optional: map Workflow Output IDs so the portal can show where the entry landed.
+# Fill in after you map the Output node (see README → "Recommended workflow change").
+OUTPUT_MAP = '{}'
+PARTICIPANTS = '''[
+  {"Name": "Minu",     "Email": "minu.bobasn@aaico.com"},
+  {"Name": "Asem",     "Email": "asem.elsebasey@aaico.com"},
+  {"Name": "Soufiane", "Email": "soufiane.dosuhaib@aaico.com"},
+  {"Name": "Mahmoud",  "Email": "mahmoud.asbdelrahman@aaico.com"},
+  {"Name": "Moataz",   "Email": "moataz.elnoamani@aaico.com"}
+]'''
+
+# Secrets — set with `npx wrangler secret put <NAME>`, never written here:
+#   OPUS_BASE_URL          e.g. https://opus-operator.<your-domain>
+#   OPUS_SERVICE_KEY       Opus x-service-key
+#   GOOGLE_CLIENT_ID
+#   GOOGLE_CLIENT_SECRET
+#   GOOGLE_REFRESH_TOKEN   needs Sheets read/write + Gmail send scopes
+#   MANAGER_PASSCODE       what managers type into the portal
+#   TOKEN_SECRET           any long random string (signs manager sessions)
