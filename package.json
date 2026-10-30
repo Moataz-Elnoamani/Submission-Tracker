@@ -1,0 +1,6 @@
+{
+  "name": "mn-submission-portal",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" }
+}
