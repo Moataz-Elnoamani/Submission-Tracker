@@ -54,20 +54,23 @@ const RUNS_LIST_LIMIT = 200;
 // ======================================================================
 // Entry
 // ======================================================================
-export default {
-  async fetch(request, env) {
-    const cors = corsHeaders(request, env);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+// Shared entry: used by Cloudflare (default export) and by Vercel (api/[...path].js).
+export async function handle(request, env) {
+  const cors = corsHeaders(request, env);
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
-    try {
-      const res = await route(request, env);
-      for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
-      return res;
-    } catch (err) {
-      const status = err.status || 500;
-      return json({ error: err.message || String(err) }, status, cors);
-    }
-  },
+  try {
+    const res = await route(request, env);
+    for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+    return res;
+  } catch (err) {
+    const status = err.status || 500;
+    return json({ error: err.message || String(err) }, status, cors);
+  }
+}
+
+export default {
+  fetch: (request, env) => handle(request, env),
 };
 
 async function route(request, env) {
@@ -238,7 +241,7 @@ async function caseResults(env, caseId) {
 // ======================================================================
 async function login(env, b) {
   const passcode = str(b.passcode);
-  if (!env.MANAGER_PASSCODE) throw httpError(500, "MANAGER_PASSCODE is not configured on the worker.");
+  if (!env.MANAGER_PASSCODE) throw httpError(500, "MANAGER_PASSCODE is not configured on the server.");
   if (!passcode || !(await safeEqual(passcode, env.MANAGER_PASSCODE))) {
     await sleep(600); // slow down guessing
     throw httpError(401, "Incorrect passcode.");
@@ -279,8 +282,8 @@ async function getTracker(env, tabTitle) {
 
 async function listRuns(env) {
   kvRequired(env);
-  const list = await env.RUNS.list({ prefix: "run:", limit: RUNS_LIST_LIMIT });
-  const runs = (await Promise.all(list.keys.map((k) => env.RUNS.get(k.name, "json")))).filter(Boolean);
+  const list = await runsStore(env).list({ prefix: "run:", limit: RUNS_LIST_LIMIT });
+  const runs = (await Promise.all(list.keys.map((k) => runsStore(env).get(k.name, "json")))).filter(Boolean);
 
   // Refresh a few runs that never reached a terminal status (user closed the tab mid-run).
   const stale = runs.filter((r) => !TERMINAL.includes(r.status)).slice(0, 5);
@@ -298,7 +301,7 @@ async function listRuns(env) {
 
 async function deleteRun(env, runId) {
   kvRequired(env);
-  await env.RUNS.delete("run:" + runId);
+  await runsStore(env).delete("run:" + runId);
   return { deleted: runId };
 }
 
@@ -307,8 +310,8 @@ async function purgeRuns(env, confirm) {
   if (confirm !== "DELETE-ALL") throw httpError(400, "Pass ?confirm=DELETE-ALL to purge the log.");
   let cursor, count = 0;
   do {
-    const page = await env.RUNS.list({ prefix: "run:", cursor });
-    await Promise.all(page.keys.map((k) => env.RUNS.delete(k.name)));
+    const page = await runsStore(env).list({ prefix: "run:", cursor });
+    await Promise.all(page.keys.map((k) => runsStore(env).delete(k.name)));
     count += page.keys.length;
     cursor = page.list_complete ? null : page.cursor;
   } while (cursor);
@@ -547,7 +550,7 @@ function summaryTable(tracker, row) {
 // ======================================================================
 async function google(env) {
   for (const k of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN", "SPREADSHEET_ID"])
-    if (!env[k]) throw httpError(500, k + " is not configured on the worker.");
+    if (!env[k]) throw httpError(500, k + " is not configured on the server.");
   const r = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -580,9 +583,10 @@ async function gfetch(g, method, url, payload) {
 }
 
 async function opus(env, method, path, payload) {
-  if (!env.OPUS_BASE_URL || !env.OPUS_SERVICE_KEY || !env.WORKFLOW_ID)
-    throw httpError(500, "OPUS_BASE_URL, OPUS_SERVICE_KEY and WORKFLOW_ID must be configured on the worker.");
-  const r = await fetch(env.OPUS_BASE_URL.replace(/\/+$/, "") + path, {
+  if (!env.OPUS_SERVICE_KEY || !env.WORKFLOW_ID)
+    throw httpError(500, "OPUS_SERVICE_KEY and WORKFLOW_ID must be configured on the server.");
+  const base = env.OPUS_BASE_URL || "https://operator.opus.com";
+  const r = await fetch(base.replace(/\/+$/, "") + path, {
     method,
     headers: { "x-service-key": env.OPUS_SERVICE_KEY, "Content-Type": "application/json" },
     body: payload ? JSON.stringify(payload) : undefined,
@@ -595,10 +599,48 @@ async function opus(env, method, path, payload) {
 }
 
 // ======================================================================
-// Run log (Cloudflare KV)
+// Run log — Cloudflare KV binding, or Upstash Redis over REST (Vercel)
 // ======================================================================
+function runsStore(env) {
+  if (env.RUNS) return env.RUNS;
+  const url = env.UPSTASH_REDIS_REST_URL || env.KV_REST_API_URL;
+  const token = env.UPSTASH_REDIS_REST_TOKEN || env.KV_REST_API_TOKEN;
+  if (!url || !token) return null;
+  const cmd = async (...args) => {
+    const r = await fetch(url.replace(/\/+$/, ""), {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(args),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) throw httpError(502, "Run-log store error: " + (j.error || r.status));
+    return j.result;
+  };
+  // Same surface as the Cloudflare KV methods used above.
+  return {
+    async get(key, type) {
+      const v = await cmd("GET", key);
+      if (v == null) return null;
+      return type === "json" ? JSON.parse(v) : v;
+    },
+    put: (key, value) => cmd("SET", key, value),
+    delete: (key) => cmd("DEL", key),
+    async list({ prefix = "", limit = 1000, cursor } = {}) {
+      const keys = [];
+      let c = cursor || "0";
+      do {
+        const [next, batch] = await cmd("SCAN", c, "MATCH", prefix + "*", "COUNT", 500);
+        keys.push(...batch);
+        c = next;
+      } while (c !== "0");
+      keys.sort(); // reverse-timestamp ids → newest first
+      return { keys: keys.slice(0, limit).map((name) => ({ name })), list_complete: true, cursor: null };
+    },
+  };
+}
 function kvRequired(env) {
-  if (!env.RUNS) throw httpError(500, "KV namespace RUNS is not bound — see wrangler.toml.");
+  if (!runsStore(env))
+    throw httpError(500, "No run-log store: bind KV 'RUNS' (Cloudflare) or connect Upstash Redis (Vercel) — see README.");
 }
 function newRunId() {
   // Reverse timestamp so KV's lexical listing returns newest first.
@@ -606,12 +648,12 @@ function newRunId() {
   return rev + "-" + crypto.randomUUID().slice(0, 8);
 }
 async function saveRun(env, run) {
-  if (env.RUNS) await env.RUNS.put("run:" + run.runId, JSON.stringify(run));
+  if (runsStore(env)) await runsStore(env).put("run:" + run.runId, JSON.stringify(run));
 }
 async function patchRun(env, runId, patch) {
-  if (!env.RUNS) return;
-  const cur = await env.RUNS.get("run:" + runId, "json");
-  if (cur) await env.RUNS.put("run:" + runId, JSON.stringify({ ...cur, ...patch, updatedAt: new Date().toISOString() }));
+  if (!runsStore(env)) return;
+  const cur = await runsStore(env).get("run:" + runId, "json");
+  if (cur) await runsStore(env).put("run:" + runId, JSON.stringify({ ...cur, ...patch, updatedAt: new Date().toISOString() }));
 }
 
 // ======================================================================
