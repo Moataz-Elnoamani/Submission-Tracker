@@ -47,7 +47,34 @@ With `API_BASE: ""` in `config.js` the portal runs on sample data (a blue
 Locally: `python3 -m http.server` in the repo folder, then open
 `http://localhost:8000`.
 
-## 2. Deploy the worker
+## 2. Connect Opus — on Vercel (recommended)
+
+The `api/[...path].js` Vercel Function serves every `/api/*` route using the
+same code as the worker, so the portal and its API deploy together.
+
+1. **Opus API key:** in Opus, click the Opus button (top left) → **Channels → API**
+   → **+ Generate API Key**. Copy it — it is shown once.
+2. **Vercel → Project → Settings → Environment Variables** (Production + Preview):
+
+   | Name | Value |
+   |---|---|
+   | `OPUS_SERVICE_KEY` | the key from step 1 |
+   | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` | the Google OAuth app used by the workflow (Sheets + Gmail scopes) |
+   | `MANAGER_PASSCODE` | what managers type in the portal |
+   | `TOKEN_SECRET` | any long random string |
+
+   Optional overrides: `OPUS_BASE_URL` (default `https://operator.opus.com`),
+   `OUTPUT_MAP`, `PARTICIPANTS`, `MANAGER_EMAIL`, `ALLOWED_ORIGINS`.
+3. **Run log (manager Runs tab):** Vercel → **Storage → Create → Upstash (Redis)**
+   → connect it to the project. It adds `KV_REST_API_URL` / `KV_REST_API_TOKEN`.
+   Submissions still work without it; only the Runs tab needs it.
+4. **Redeploy** (Deployments → ⋯ → Redeploy) so the variables take effect, then
+   open `https://submission-tracker-five.vercel.app/api/health`.
+
+`config.js` already points `API_BASE` at the Vercel URL, so both the Vercel site
+and the GitHub Pages copy use it.
+
+## 2b. Alternative — deploy as a Cloudflare Worker
 
 ```bash
 cd worker
@@ -56,7 +83,7 @@ wrangler login
 wrangler kv namespace create RUNS      # paste the id into wrangler.toml
 # edit ALLOWED_ORIGINS in wrangler.toml → https://<your-user>.github.io
 
-wrangler secret put OPUS_BASE_URL          # e.g. https://opus-operator.<your-domain>
+wrangler secret put OPUS_BASE_URL          # https://operator.opus.com
 wrangler secret put OPUS_SERVICE_KEY       # Opus x-service-key
 wrangler secret put GOOGLE_CLIENT_ID
 wrangler secret put GOOGLE_CLIENT_SECRET
