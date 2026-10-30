@@ -3,12 +3,13 @@
  *
  * Nothing secret belongs here: this file is public on GitHub Pages.
  * The Opus service key, Google OAuth credentials and the manager passcode
- * live in the Cloudflare Worker (worker/), set as encrypted secrets.
+ * live in Vercel's Environment Variables, read by api/[...path].js.
  */
 window.PORTAL_CONFIG = {
-  // URL of the deployed worker, e.g. "https://mn-portal-api.<you>.workers.dev".
-  // Leave empty to run the portal in DEMO mode with sample data (nothing is sent).
-  API_BASE: "",
+  // Where the /api routes live — the Vercel deployment (api/[...path].js).
+  // Works from the Vercel site itself and from the GitHub Pages copy.
+  // Set to "" to run in DEMO mode with sample data (nothing is sent).
+  API_BASE: "https://submission-tracker-five.vercel.app",
 
   // Display
   PORTAL_TITLE: "Submission Tracker",
